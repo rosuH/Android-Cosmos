@@ -1,4 +1,4 @@
-# 常用系统播放器 MediaPlayer
+# 第二章 常用系统播放器 MediaPlayer
 
 
 
@@ -8,7 +8,7 @@
 
 MediaPlayer 用于控制视频/音频文件及流的播放，由状态机进行控制。下图是 MediaPlayer 的状态周期。
 
-![mediaplayer_state_diagram](常用系统播放器 MediaPlayer.assets/mediaplayer_state_diagram.gif)
+![mediaplayer_state_diagram](../images/l7UhONFQoJSbaHn.gif)
 
 - 椭圆代表 MediaPlayer 的驻留状态，弧代表播放控制并且驱动 MediaPlayer 状态进行过度
 	- 单箭头弧表示同步函数调用
