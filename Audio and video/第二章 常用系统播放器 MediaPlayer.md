@@ -51,6 +51,36 @@ MediaPlayer 用于控制视频/音频文件及流的播放，由状态机进行�
     - 状态：Initialized --> preparing（时间较短） --> prepared
 - 到达 Prepared 状态后，回调 `OnPreparedListener.onPrepared()`监听器
 
+### 6. Started 状态
+
+当 MediaPlayer 进入 Prepared 状态后，就可以设置音视频、looping、screenOnWhilePlaying 等属性了。
+
+- 触发条件：调用`start`函数并成功返回
+  - 处于 Started 状态时，如果用户事先注册过`setOnBufferingUpdatedListener`，那播放器就会回调`OnBufferingUpdateListener.onBufferingUpdate()`。这个函数主要用于应用程序保持跟踪音视频流的 buffering status
+- 注意：如果 MediaPlayer 已经处于 Started 状态，那么再调用 Started 函数是没有任何作用的
+
+### 7. Paused 状态
+
+- 触发条件：调用`MediaPlayer.pause()`
+- 过程：
+  - 从`Started --> Paused` 的「状态切换」过程是瞬间的
+  - 而从 `Started --> Paused` 状态的切换却是异步的。状态更新后并调用`isPlaying`函数前，会有一些耗时；已经缓冲过的数据流，也要耗费数秒
+- 注意：
+  - 当`start`函数从`Paused`状态恢复过来时，`playback`恢复之前暂停的位置，接着开始播放，此时 `MediaPlayer`状态又变成`Started`	 
+
+### 8. Stopped 状态
+
+- 触发：调用`MediaPlayer.stop()`函数
+- 过程：无论播放器处于`Started`, `Paused`, `Prepared`或`PlackbackCompleted`状态，都进入`Stopped`状态
+  - 如果已经处于`Stopped`，那么再次调用`stop`函数是无效的，依然会保持`Stoppped`状态
+- 注意：
+  - 一旦进入`Stopped`状态，`playback`将不能开始，直到重新调用`prepare`或`prepareAsync`函数，处于`Prepared`状态才可以开始
+  - 在`Seek`操作完成后，播放器内部将会回调`OnSeekComplete.onSeekComplete`函数；其他状态下也可以调用`SeekTo`函数，比如`Prepared`，`Paused`以及`PlaybackComplete`
+
+### 9. PlaybackComplete状态
+
+当前播放位置可以通过`getCurrentPosition` 函数获取。
+
 
 
 
