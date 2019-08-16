@@ -81,7 +81,20 @@ MediaPlayer 用于控制视频/音频文件及流的播放，由状态机进行�
 
 当前播放位置可以通过`getCurrentPosition` 函数获取。
 
+- 触发条件：播放前设置 `setLooping(fasle)`（表示不循环播放），播放器内部回调`OnCompletion.onCompletion()`
+  - 此时调用`start`函数，将重启播放器从头开始播放数据
+- 注意：
+  - 如果设置了`setLooping(true)`（表示循环播放），一次数据播放完了之后，已经是处于`Started`状态
 
+
+
+## 2.2 从创建到 setDataSource 过程
+
+### 2.2.1 从创建到  setDisplay 过程
+
+时序图如下：
+
+![pic](../images/MZa8NIJCeRiwko7.jpg)
 
 
 
