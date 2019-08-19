@@ -96,10 +96,95 @@ MediaPlayer 用于控制视频/音频文件及流的播放，由状态机进行�
 
 ![pic](../images/MZa8NIJCeRiwko7.jpg)
 
+调用顺序依次为：
 
+- `getService()` 从  `Servicemanager`获取对应的`MediaPlayerService`
+- 调用`native_setup`创建播放器
+- 调用`setDataSource`把 URL 地址传入底层
+- 准备好后，通过`setDisaplay`传入`SurfaceHolder`，以便讲解码出的数据放到`SurfaceHolder`中的`Surface`，最后显示在`SurfaceView`上
 
+### 2.2.2 创建过程
 
+`MediaPlayer`可以有两种方式进行创建：
 
+- `MediaPlayer.create(context, uri)`
+- `new MediaPlayer()`
 
+#### MediaPlayer.create() 创建
 
+当调用`MediaPlayer.create(this, "http://www.example.com/example.mp4")`时，进入创建过程：
+
+```java
+public static MediaPlayer create(Context context, Uri uri, SurfaceHolder holder,
+        AudioAttributes audioAttributes, int audioSessionId) {
+    try {
+      // 新建一个 MediaPlayer 实例
+        MediaPlayer mp = new MediaPlayer();
+      // 声音处理
+        final AudioAttributes aa = audioAttributes != null ? audioAttributes :
+            new AudioAttributes.Builder().build();
+      // 设置音频属性
+        mp.setAudioAttributes(aa);
+      // 设置声音的会话 ID
+        mp.setAudioSessionId(audioSessionId);
+      // 调用 setDataSource
+        mp.setDataSource(context, uri);
+        if (holder != null) {
+          /**
+          * SurfaceHolder 是一个 Suface 的控制器，
+          * 用来操纵 Surface，处理他在 Canvas 上作画的效果和动画
+          * 控制表面、大小和像素等
+          */
+            mp.setDisplay(holder);
+        }
+      // 开始准备
+        mp.prepare();
+        return mp;
+    } catch (IOException ex) {
+        Log.d(TAG, "create failed:", ex);
+        // fall through
+    } catch (IllegalArgumentException ex) {
+        Log.d(TAG, "create failed:", ex);
+        // fall through
+    } catch (SecurityException ex) {
+        Log.d(TAG, "create failed:", ex);
+        // fall through
+    }
+
+    return null;
+}
+```
+
+`MediaPlayer.create()`内部完成了：新建 player 实例、设置数据、做好`prepare`这些工作。此时外部仅需要调取`satrt()`函数，即可开始播放。
+
+下面我们看看 MediaPlayer 的构造函数是如何操作的。
+
+#### MediaPlayer 构造函数
+
+```java
+public MediaPlayer() {
+    super(new AudioAttributes.Builder().build(),
+            AudioPlaybackConfiguration.PLAYER_TYPE_JAM_MEDIAPLAYER);
+  // 定义一个 looper
+    Looper looper;
+    if ((looper = Looper.myLooper()) != null) {
+      // 实例化`EventHandler`对象
+        mEventHandler = new EventHandler(this, looper);
+    } else if ((looper = Looper.getMainLooper()) != null) {
+        mEventHandler = new EventHandler(this, looper);
+    } else {
+        mEventHandler = null;
+    }
+		// 时间数据容器，一般 provider 都是和数据联系起来的
+    mTimeProvider = new TimeProvider(this);
+   
+    mOpenSubtitleSources = new Vector<InputStream>();
+    /* Native setup requires a weak reference to our object.
+        * It's easier to create it here than in C++.
+        */
+    native_setup(new WeakReference<MediaPlayer>(this));
+
+    baseRegisterPlayer();
+}
+```
 
