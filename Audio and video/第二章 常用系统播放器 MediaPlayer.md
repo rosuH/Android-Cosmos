@@ -188,3 +188,72 @@ public MediaPlayer() {
 }
 ```
 
+接着是 Native 层如何创造一个 MediaPlayer。
+
+在 MediaPlayer 中加载链接库文件：
+
+```java
+static {
+  	System.locaLibrary("media_jni");
+    native_init();
+}
+```
+
+进入到`android_media_MediaPlayer.cpp`，先执行了`android_media_MediaPlayer_native_init` 函数
+
+```c++
+static void
+android_media_MediaPlayer_native_init(JNIEnv *env){
+	// 类的句柄
+	jclass clazz;
+	// 在 Native 层调用 Java 层，获取 MediaPlayer 对象
+	clazz = env->FindClass("android/media/MediaPlayer");
+	if (clazz == NULL){
+		return;
+	}
+	// 获取成员变量 mNativeContext，她在 MediaPlayer 中是一个 long 型整数，实际对应一个内存地址
+	fields.context = env->GetFieldID(clazz, "mNativeContext", "J");
+	if (fields.context == NULL){
+		return;
+	}
+	
+	field.post_event = env->GetStaticMethodID(clazz, "postEventFromNative", "(Ljava/lang/object;IIILjava/lang/Object;IIIjava/lang/Object;)V");
+	if (fields.post_even == NULL){
+		return;
+	}
+  ...
+}
+```
+
+上述代码通过 JNI 调用了 Java 层的 MediaPlayer 类，然后获取 `mNativeContext`的指针；接着调用了 `MediaPlayer.java` 中的静态方法`postEventFromNative`，把 Native 事件回调到 Java 层，使用 EventHandler post 事件回到主线程，用软引用的方式指向原生的 MediaPlayer ，以保证 Native 代码是安全的。
+
+```java
+private static void postEventFromNative(Object mediaplayer_ref, int what, int arg1, int arg2, Object obj){
+  MediaPlayer mp = (MediaPlayer)((WeakReference)mediaplayer_ref).get();
+  if (mp == null){
+    return;
+  }
+  ...
+  if (mp.mEventHandler != null) {
+    Message m = mp.mEventHandler.obtainMessage(what, arg1, arg2, obj);
+    mp.mEventHandler.sendMessage(m);
+  }
+}
+```
+
+而`native_steup`函数，也在`android_media_MediaPlayer.cpp`中，主要是设置一些回调以及创建 C++ 层的 MediaPlayer 对象。
+
+```c++
+static void android_media_MediaPlayer_native_setup(JNIEnv *env, jobject thiz, jobject weak_this){
+  sp<MediaPlayer> mp = new MediaPlayer();
+  // 给 MediaPlayer 创建一个 listener，以便我们在 Java 设置的 setPrepareListener, setOnCompleteListener 能产生回调
+  sp<JNIMediaPlayerListener> listener = new JNIMediaPlayerListener(env, thiz, weak_this);
+  mp->setListener(listener);
+  setMediaPlayer(env, thiz, mp);
+}
+```
+
+
+
+### 	2.2.3 setDataSource 过程
+
