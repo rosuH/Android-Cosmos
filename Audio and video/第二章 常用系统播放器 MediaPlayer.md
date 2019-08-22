@@ -257,3 +257,155 @@ static void android_media_MediaPlayer_native_setup(JNIEnv *env, jobject thiz, jo
 
 ### 	2.2.3 setDataSource 过程
 
+```java
+public void setDataSource(String path)
+        throws IOException, IllegalArgumentException, SecurityException, IllegalStateException {
+    setDataSource(path, null, null);
+}
+
+public void setDataSource(String path, Map<String, String> headers)
+        throws IOException, IllegalArgumentException, SecurityException, IllegalStateException {
+    setDataSource(path, headers, null);
+}
+
+private void setDataSource(String path, Map<String, String> headers, List<HttpCookie> cookies)
+        throws IOException, IllegalArgumentException, SecurityException, IllegalStateException
+{
+    String[] keys = null;
+    String[] values = null;
+		// 获取请求头中的 key 和 value
+    if (headers != null) {
+        keys = new String[headers.size()];
+        values = new String[headers.size()];
+
+        int i = 0;
+        for (Map.Entry<String, String> entry: headers.entrySet()) {
+            keys[i] = entry.getKey();
+            values[i] = entry.getValue();
+            ++i;
+        }
+    }
+    setDataSource(path, keys, values, cookies);
+}
+
+private void setDataSource(String path, String[] keys, String[] values,
+        List<HttpCookie> cookies)
+        throws IOException, IllegalArgumentException, SecurityException, IllegalStateException {
+    final Uri uri = Uri.parse(path);
+    final String scheme = uri.getScheme();
+    if ("file".equals(scheme)) {
+        path = uri.getPath();
+    } else if (scheme != null) {
+        // 处理非文件类型资源
+        nativeSetDataSource(
+            MediaHTTPService.createHttpServiceBinderIfNecessary(path, cookies),
+            path,
+            keys,
+            values);
+        return;
+    }
+		// 处理文件类型资源
+    final File file = new File(path);
+    if (file.exists()) {
+        FileInputStream is = new FileInputStream(file);
+        FileDescriptor fd = is.getFD();
+        setDataSource(fd);
+        is.close();
+    } else {
+        throw new IOException("setDataSource failed.");
+    }
+}
+```
+
+处理文件资源描述符的方法（`setDataSource(fd)`）：
+
+```java
+public void setDataSource(FileDescriptor fd)
+        throws IOException, IllegalArgumentException, IllegalStateException {
+    // intentionally less than LONG_MAX
+    setDataSource(fd, 0, 0x7ffffffffffffffL);
+}
+
+public void setDataSource(FileDescriptor fd, long offset, long length)
+        throws IOException, IllegalArgumentException, IllegalStateException {
+    _setDataSource(fd, offset, length);
+}
+
+private native void _setDataSource(FileDescriptor fd, long offset, long length)
+    throws IOException, IllegalArgumentException, IllegalStateException;
+```
+
+`_setDataSource()` 是 Native 层方法，在[`android_media_MediaPlayer`](https://android.googlesource.com/platform/frameworks/base/+/gingerbread/media/jni/android_media_MediaPlayer.cpp)中通过函数映射声明进行动态注册：
+
+```c++
+static JNINativeMethod gMethods[] = {
+    {"setDataSource",       "(Ljava/lang/String;)V",            (void *)android_media_MediaPlayer_setDataSource},
+    {"setDataSource",       "(Ljava/lang/String;Ljava/util/Map;)V",(void *)android_media_MediaPlayer_setDataSourceAndHeaders},
+    {"setDataSource",       "(Ljava/io/FileDescriptor;JJ)V",    (void *)android_media_MediaPlayer_setDataSourceFD},
+    {"_setVideoSurface",    "()V",                              (void *)android_media_MediaPlayer_setVideoSurface},
+    {"prepare",             "()V",                              (void *)android_media_MediaPlayer_prepare},
+    {"prepareAsync",        "()V",                              (void *)android_media_MediaPlayer_prepareAsync},
+    {"_start",              "()V",                              (void *)android_media_MediaPlayer_start},
+    {"_stop",               "()V",                              (void *)android_media_MediaPlayer_stop}
+// 省略部分代码
+...
+}
+```
+
+映射到函数`android_media_MediaPlayer_setDataSourceFD`：
+
+```c++
+static void
+android_media_MediaPlayer_setDataSourceFD(JNIEnv *env, jobject thiz, jobject fileDescriptor, jlong offset, jlong length)
+{
+    sp<MediaPlayer> mp = getMediaPlayer(env, thiz);
+  	// 判空异常
+    if (mp == NULL ) {
+        jniThrowException(env, "java/lang/IllegalStateException", NULL);
+        return;
+    }
+    if (fileDescriptor == NULL) {
+        jniThrowException(env, "java/lang/IllegalArgumentException", NULL);
+        return;
+    }
+    // 从 JNI 中获取 java.io.FileDescriptor
+    int fd = jniGetFDFromFileDescriptor(env, fileDescriptor);
+    LOGV("setDataSourceFD: fd %d", fd);
+    process_media_player_call( env, thiz, mp->setDataSource(fd, offset, length), "java/io/IOException", "setDataSourceFD failed." );
+}
+```
+
+然后是`process_media_payer_call`函数：
+
+```c++
+// If exception is NULL and opStatus is not OK, this method sends an error
+// event to the client application; otherwise, if exception is not NULL and
+// opStatus is not OK, this method throws the given exception to the client
+// application.
+static void process_media_player_call(JNIEnv *env, jobject thiz, status_t opStatus, const char* exception, const char *message)
+{
+    if (exception == NULL) {  // Don't throw exception. Instead, send an event.
+        if (opStatus != (status_t) OK) {
+            // 不抛出异常，而是发出一个 Error 事件
+            sp<MediaPlayer> mp = getMediaPlayer(env, thiz);
+            if (mp != 0) mp->notify(MEDIA_ERROR, opStatus, 0);
+        }
+    } else {  // Throw exception!
+        // 异常处理代码
+        if ( opStatus == (status_t) INVALID_OPERATION ) {
+            jniThrowException(env, "java/lang/IllegalStateException", NULL);
+        } else if ( opStatus != (status_t) OK ) {
+            if (strlen(message) > 230) {
+               // if the message is too long, don't bother displaying the status code
+               jniThrowException( env, exception, message);
+            } else {
+               char msg[256];
+                // append the status code to the message
+               sprintf(msg, "%s: status=0x%X", message, opStatus);
+               jniThrowException( env, exception, msg);
+            }
+        }
+    }
+}
+```
+
