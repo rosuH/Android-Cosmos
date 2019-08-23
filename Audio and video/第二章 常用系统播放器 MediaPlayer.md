@@ -257,6 +257,8 @@ static void android_media_MediaPlayer_native_setup(JNIEnv *env, jobject thiz, jo
 
 ### 	2.2.3 setDataSource 过程
 
+#### 文件传入的情况
+
 ```java
 public void setDataSource(String path)
         throws IOException, IllegalArgumentException, SecurityException, IllegalStateException {
@@ -371,7 +373,16 @@ android_media_MediaPlayer_setDataSourceFD(JNIEnv *env, jobject thiz, jobject fil
     // 从 JNI 中获取 java.io.FileDescriptor
     int fd = jniGetFDFromFileDescriptor(env, fileDescriptor);
     LOGV("setDataSourceFD: fd %d", fd);
+  	// mp->setDataSource(fd, offset, length) 函数得到状态
     process_media_player_call( env, thiz, mp->setDataSource(fd, offset, length), "java/io/IOException", "setDataSourceFD failed." );
+}
+
+/*
+ * 调用 JNIEnv* 中的 GetIntFiled 获取对应变量
+ https://android.googlesource.com/platform/dalvik/+/gingerbread/libnativehelper/JNIHelp.c
+ */
+int jniGetFDFromFileDescriptor(JNIEnv* env, jobject fileDescriptor) {
+    return (*env)->GetIntField(env, fileDescriptor, gCachedFields.descriptorField);
 }
 ```
 
@@ -408,4 +419,111 @@ static void process_media_player_call(JNIEnv *env, jobject thiz, status_t opStat
     }
 }
 ```
+
+综上：
+
+- `mp->setDataSource(fd, offset, length)`函数得到状态之后，对各种状态进行通知
+- 有异常状态会直接抛出
+
+
+
+#### HTTP/RTSP 传入情况下
+
+同样根据映射表找到`android_media_MediaPlayer_setDataSourceAndHeaders`函数：
+
+```c++
+static void
+android_media_MediaPlayer_setDataSourceAndHeaders(
+        JNIEnv *env, jobject thiz, jobject httpServiceBinderObj, jstring path,
+        jobjectArray keys, jobjectArray values) {
+    // 获取 MediaPlayer 对象
+    sp<MediaPlayer> mp = getMediaPlayer(env, thiz);
+    // 异常处理
+    if (mp == NULL ) {
+        jniThrowException(env, "java/lang/IllegalStateException", NULL);
+        return;
+    }
+    if (path == NULL) {
+        jniThrowException(env, "java/lang/IllegalArgumentException", NULL);
+        return;
+    }
+    // 内存溢出
+    const char *tmp = env->GetStringUTFChars(path, NULL);
+    if (tmp == NULL) {  // Out of memory
+        return;
+    }
+    ALOGV("setDataSource: path %s", tmp);
+    String8 pathStr(tmp);
+    env->ReleaseStringUTFChars(path, tmp);
+    tmp = NULL;
+    // We build a KeyedVector out of the key and val arrays
+    KeyedVector<String8, String8> headersVector;
+    if (!ConvertKeyValueArraysToKeyedVector(
+            env, keys, values, &headersVector)) {
+        return;
+    }
+    sp<IMediaHTTPService> httpService;
+    if (httpServiceBinderObj != NULL) {
+        // 通过 Binder 机制将 httpServiceBinderObj 传给 IPC 并返回 binder
+        sp<IBinder> binder = ibinderForJavaObject(env, httpServiceBinderObj);
+        // 强制转成 IMediaHttpsService
+        httpService = interface_cast<IMediaHTTPService>(binder);
+    }
+    // 开始判断状态
+    status_t opStatus =
+        mp->setDataSource(
+                httpService,
+                pathStr,
+                headersVector.size() > 0? &headersVector : NULL);
+    // 获取状态后如果有错则使用 notify 通知
+    process_media_player_call(
+            env, thiz, opStatus, "java/io/IOException",
+            "setDataSource failed." );
+}
+```
+
+
+
+综上，`setDataSource`过程就完成了。此处的调用过程有两种：
+
+- 正向调用：JAVA --> JNI --> C++ 
+- 反向调用：C++ --> JNI --> JAVA
+  - 例如`mp->setDataSource( httpService, pathStr, headersVector.size() > 0? &headersVector : NULL);`
+
+JAVA 和 C++ 层互相调用的好处：
+
+- 安全性：封装在 Native 层的代码以 `.so` 文件形式存在，破坏性风险小
+- 效率高：在运行速度上 C++ 执行时间短，且底层也是用 C++ 语言编写；对于复杂的渲染以及时间要求比较高的渲染，放在 Native 层是最好不过的选择
+- 连通性：正向调用将值传入，反向调用将处理结果通知回去；相当于一条管道
+
+
+
+### 2.2.4 setDisplay 过程
+
+在`setDataSource`之后，开始进行的是`mp.setDisplay(holder)`：
+
+```java
+public void setDisplay(SurfaceHolder sh) {
+    // 给 Surface 设置一个控制器，用于展示视频图像
+    mSurfaceHolder = sh;
+    Surface surface;
+    if (sh != null) {
+        surface = sh.getSurface();
+    } else {
+        surface = null;
+    }
+    // 给视频设置 Surface，带 _ 的函数是 native 函数
+    _setVideoSurface(surface);
+    // 更新 Surface 到屏幕上
+    updateSurfaceScreenOn();
+}
+```
+
+`_setVideoSurface()`对应的函数：
+
+```c++
+
+```
+
+
 
