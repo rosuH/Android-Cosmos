@@ -522,8 +522,70 @@ public void setDisplay(SurfaceHolder sh) {
 `_setVideoSurface()`对应的函数：
 
 ```c++
+static void
+android_media_MediaPlayer_setVideoSurface(JNIEnv *env, jobject thiz, jobject jsurface)
+{
+    setVideoSurface(env, thiz, jsurface, true /* mediaPlayerMustBeAlive */);
+}
 
+static void
+setVideoSurface(JNIEnv *env, jobject thiz, jobject jsurface, jboolean mediaPlayerMustBeAlive)
+{
+    sp<MediaPlayer> mp = getMediaPlayer(env, thiz);
+    if (mp == NULL) {
+        if (mediaPlayerMustBeAlive) {
+            jniThrowException(env, "java/lang/IllegalStateException", NULL);
+        }
+        return;
+    }
+
+    decVideoSurfaceRef(env, thiz);
+
+    sp<IGraphicBufferProducer> new_st;
+    if (jsurface) {
+      	// 得到 Java 层的 Surface
+        sp<Surface> surface(android_view_Surface_getSurface(env, jsurface));
+        if (surface != NULL) {
+          	// 从 Java 的 Surface 中获取 IGraphicBufferProducer
+            new_st = surface->getIGraphicBufferProducer();
+            if (new_st == NULL) {
+                jniThrowException(env, "java/lang/IllegalArgumentException",
+                    "The surface does not have a binding SurfaceTexture!");
+                return;
+            }
+            new_st->incStrong((void*)decVideoSurfaceRef);
+        } else {
+            jniThrowException(env, "java/lang/IllegalArgumentException",
+                    "The surface has been released");
+            return;
+        }
+    }
+
+    env->SetLongField(thiz, fields.surface_texture, (jlong)new_st.get());
+
+    // This will fail if the media player has not been initialized yet. This
+    // can be the case if setDisplay() on MediaPlayer.java has been called
+    // before setDataSource(). The redundant call to setVideoSurfaceTexture()
+    // in prepare/prepareAsync covers for this case.
+    mp->setVideoSurfaceTexture(new_st);
+}
+static void
+decVideoSurfaceRef(JNIEnv *env, jobject thiz)
+{
+    sp<MediaPlayer> mp = getMediaPlayer(env, thiz);
+    if (mp == NULL) {
+        return;
+    }
+
+    sp<IGraphicBufferProducer> old_st = getVideoSurfaceTexture(env, thiz);
+    if (old_st != NULL) {
+        old_st->decStrong((void*)decVideoSurfaceRef);
+    }
+}
 ```
 
-
-
+- `SurfaceTexture`：可以从视频解码中获取图像流（image Stream），但他在获取之后并不需要显示出来。我们可以从`SurfaceTexture`中取得图像帧的副本进行处理，处理完毕后再送给另一个`SurfaceView`用于显示
+- `Surface`：处理被屏幕排序的原生`Buffer`，Android 中的`Surface`就是一个用来画图（Graphic）或图像（image）的地方
+  - 对于 View 及其子类，都是画到 Surface 上的，各 Surface 对象通过 SurfaceFlinger 合成到 FrameBuffer
+  - 每个 Surface 都是双缓冲
+    - 两个线程：一个渲染线程，一个 UI 更新线程
