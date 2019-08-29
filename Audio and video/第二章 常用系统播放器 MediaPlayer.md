@@ -588,4 +588,36 @@ decVideoSurfaceRef(JNIEnv *env, jobject thiz)
 - `Surface`：处理被屏幕排序的原生`Buffer`，Android 中的`Surface`就是一个用来画图（Graphic）或图像（image）的地方
   - 对于 View 及其子类，都是画到 Surface 上的，各 Surface 对象通过 SurfaceFlinger 合成到 FrameBuffer
   - 每个 Surface 都是双缓冲
-    - 两个线程：一个渲染线程，一个 UI 更新线程
+    - 两个线程：一个渲染线程，一个 UI 更新线程；分别对应两个 Buffer 中的 BackBuffer 和 FrontBuffer
+    - 在 Surface 中创建的 Canvas 对象，可用来管理 Surface 绘图操作，Canvas 对应 Bitmap，存储 Surface 中的内容
+
+- `SurfaceView`：经常在`Camera`, `MediaRecorder`, `MediaPlayer`中，被用以显示图像
+  - 是 View 的子类，实现了`Parcelable`接口
+  - 内置了一个专门用于绘制的 Surface，SurfaceView 可以控制这个 Surface 的格式和尺寸，及其所绘制的位置
+  - Surface 就是存储数据的地方，而 SurfaceView 就是展示数据的地方
+- `SurfaceHolder`：管理`Surface`的容器
+  - 是一个接口， Surface 的监听器
+    - 通过回调函数`addCallback(SurfaceHolder, Callback back)`坚挺 Surface 的创建
+    - 通过获取 Surface 的 Canvas 对象，可以锁定该 Surface
+    - 所得到的 Canvas 对象在完成修改 Surfac 中的数据后，释放同步锁，并提交改变 Surface 的状态及图像，展示新的图像数据
+
+综上：`SurfaceView`中调用`getHolder`函数，可以获取当前`SurfaceView`中的`Surface`对应的`SufaceHolder`；`SurfaceHolder`开始对`Surface`进行管理操作。
+
+上述就是`setDiaplay`的过程，Java 层中`setDisplay`的最后一行，就是通过 JNI 返回的`Surface`，时时做好更新准备。
+
+
+
+## 2.3 开始 prepare 后的流程
+
+我们将从 MediaPlayer 的生态上认识各类库之间的依赖调用关系。
+
+MediaPlayer 部分头文件在`frameworks/include/media`目录中，此目录和`libmedia.so`库源文件目录`frameworks/av/media/libmedia/`相对应，主要包括下列几个：
+
+- `IMediaPlayerClient.h`
+- `mediaplayer.h`
+  - 提供对上层的接口
+- `IMediaPlayer.h`
+- `IMediaPlayerService.h`
+- `MediaPlayerInterface.h`
+
+![](../images/1620.jpeg)
