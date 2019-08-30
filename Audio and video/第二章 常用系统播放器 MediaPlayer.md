@@ -620,4 +620,20 @@ MediaPlayer 部分头文件在`frameworks/include/media`目录中，此目录和
 - `IMediaPlayerService.h`
 - `MediaPlayerInterface.h`
 
+下图是 MediaPlayer 各个具体类之间的依赖关系。
+
 ![](../images/1620.jpeg)
+
+- 实线非实心箭头表示「关联关系」，也就是对象间的引用
+  - 箭头起始点的类，持有箭头终止点的类的一个对象；后者作为前者的一个属性而存在
+  - `MediaPlayerService`持有`PVPlayer`的引用
+- 实线空心三角箭头表示「泛化关系」，也就是类与类之间的继承关系
+  - 箭头起始方向的类，继承了箭头所指方向的类
+  - `MediaPlayerService::Client` 继承了`BnMediaPlayer`，后者继承了`IMediaPlayer`，直到`IMediaPlayerClient`类
+
+
+
+运行时，MediaPlayer 大致分为`Client`和`Server`两个部分，分别在两个进程中运行，他们之间通过`Binder`机制实现 IPC 通信。
+
+- `IMediaPlayerService.h`，`IMediaPlayerClient.h` 和`mediaplayer.h`三个头文件定义了`MediaPlayer`的接口和架构
+  - 目录中有专门的`MediaPlayerService.cpp`和`mediaplayer.cpp`文件对应上面的三个头文件，用于 MediaPlayer  架构的实现
