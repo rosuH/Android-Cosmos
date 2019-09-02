@@ -637,3 +637,67 @@ MediaPlayer 部分头文件在`frameworks/include/media`目录中，此目录和
 
 - `IMediaPlayerService.h`，`IMediaPlayerClient.h` 和`mediaplayer.h`三个头文件定义了`MediaPlayer`的接口和架构
   - 目录中有专门的`MediaPlayerService.cpp`和`mediaplayer.cpp`文件对应上面的三个头文件，用于 MediaPlayer  架构的实现
+- 给播放器设置数据源且展示`Surface`后，我们应当开始调用`prepare`或`prepareAsync`
+    - `prepare`是一个同步函数，对于文件类型，调用它后将暂时被阻塞
+    - 当播放器回调了`onPrepared`函数，进入`prepared`状态后， MediaPlayer 已经准备好数据准备播放了。此时阻塞消失
+
+`prepare()`函数：
+
+```java
+public void prepare() throws IOException, IllegalStateException {
+    _prepare();
+    scanInternalSubtitleTracks();
+
+    // DrmInfo, if any, has been resolved by now.
+    synchronized (mDrmLock) {
+        mDrmInfoResolved = true;
+    }
+}
+```
+
+`android_media_MediaPlayer_prepare`
+
+```c++
+static void
+android_media_MediaPlayer_prepare(JNIEnv *env, jobject thiz)
+{
+    sp<MediaPlayer> mp = getMediaPlayer(env, thiz);
+    if (mp == NULL ) {
+        jniThrowException(env, "java/lang/IllegalStateException", NULL);
+        return;
+    }
+
+    // Handle the case where the display surface was set before the mp was
+    // initialized. We try again to make it stick.
+  	// 获取 IGraphicBufferProducer 类型的指针 
+    sp<IGraphicBufferProducer> st = getVideoSurfaceTexture(env, thiz);
+  	// 传递给 MediaPlayer
+    mp->setVideoSurfaceTexture(st);
+		// 检查 MediaPlayer 调用 prepare 后是否有异常（参数不合法、IO 异常等）
+    process_media_player_call( env, thiz, mp->prepare(), "java/io/IOException", "Prepare failed." );
+}
+```
+
+- `IGraphicBufferProducer`是 APP 和 `BufferQueue` 的重要桥梁，承担者单个应用进程中的 UI 显示需求
+- `BpGraphicBufferProducer` 是 `GraphicBufferProducer` 在客户端的代理对象，负责和 `SurfaceFlinger` 交互
+    - `GraphicBufferProducer`通过 `gbp` （`IGraphicBUfferProducer`）向 `BufferQueue` 获取 `Buffer`，然后填充 UI 信息，填充完毕会通知`SurfaceFlinger`
+
+如果传入 MediaPlayer 是一个网络 URI，也就是输入网络流数据，那么 MediaPlayer 将会使用 `prepareAsnc`函数。
+
+例如下列调用方式：
+
+```java
+public void startPlayUrl(Uri uri){
+  	MediaPlayer mp = new MediaPlayer();
+  	try {
+      mp.setDataSource(this, uri);
+    } catch(Exception e){
+      e.printStackTrace();
+    }
+  	mp.setOnPrepareListener(prepareListener);
+  	mp.setOnVideoSizeChangerListener(videoSizeChangeListener);
+  	mp.setOnOnErrorListener(onErrorListener);
+  	mp.prepareAsync();
+}
+```
+
