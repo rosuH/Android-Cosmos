@@ -701,3 +701,78 @@ public void startPlayUrl(Uri uri){
 }
 ```
 
+之所以建议网络流尽量调用`prepareAsync()`，是因为这个函数是异步的，不会导致没有足够的数据而影响起播。
+
+/[frameworks](http://androidxref.com/9.0.0_r3/xref/frameworks/)/[base](http://androidxref.com/9.0.0_r3/xref/frameworks/base/)/[media](http://androidxref.com/9.0.0_r3/xref/frameworks/base/media/)/[jni](http://androidxref.com/9.0.0_r3/xref/frameworks/base/media/jni/)/[android_media_MediaPlayer.cpp](http://androidxref.com/9.0.0_r3/xref/frameworks/base/media/jni/android_media_MediaPlayer.cpp)
+
+```c++
+static void
+android_media_MediaPlayer_prepareAsync(JNIEnv *env, jobject thiz)
+{
+    sp<MediaPlayer> mp = getMediaPlayer(env, thiz);
+    if (mp == NULL ) {
+        jniThrowException(env, "java/lang/IllegalStateException", NULL);
+        return;
+    }
+
+    // Handle the case where the display surface was set before the mp was
+    // initialized. We try again to make it stick.
+    sp<IGraphicBufferProducer> st = getVideoSurfaceTexture(env, thiz);
+    mp->setVideoSurfaceTexture(st);
+
+    process_media_player_call( env, thiz, mp->prepareAsync(), "java/io/IOException", "Prepare Async failed." );
+}
+```
+
+[`prepareAsync`](http://androidxref.com/7.1.2_r36/xref/frameworks/av/media/libmedia/mediaplayer.cpp#288)
+
+```c++
+status_t MediaPlayer::prepareAsync()
+{
+    ALOGV("prepareAsync");
+    // 互斥锁
+    Mutex::Autolock _l(mLock);
+    return prepareAsync_l();
+}
+```
+
+[`prepareAsync_l`](http://androidxref.com/7.1.2_r36/xref/frameworks/av/media/libmedia/mediaplayer.cpp#244)
+
+```c++
+// must call with lock held
+status_t MediaPlayer::prepareAsync_l()
+{
+    if ( (mPlayer != 0) && ( mCurrentState & (MEDIA_PLAYER_INITIALIZED | MEDIA_PLAYER_STOPPED) ) ) {
+        if (mAudioAttributesParcel != NULL) {
+            mPlayer->setParameter(KEY_PARAMETER_AUDIO_ATTRIBUTES, *mAudioAttributesParcel);
+        } else {
+            // 设置音频流类型
+            mPlayer->setAudioStreamType(mStreamType);
+        }
+        mCurrentState = MEDIA_PLAYER_PREPARING;
+        return mPlayer->prepareAsync();
+    }
+    ALOGE("prepareAsync called in state %d, mPlayer(%p)", mCurrentState, mPlayer.get());
+    return INVALID_OPERATION;
+}
+```
+
+`mPlayer->prepareAsync()` 是 `IMediaPlayer` 的匿名 Binder Server，属于 MediaPlayer 架构中的 Server 端，最终回调到 Client 端的 `IMediaPlayer`，也就是`BnMediaPlayer`。该`BnMediaPlayer`对应的代码如下：
+
+[MediaPlayerService::Client::prepareAsync](http://androidxref.com/9.0.0_r3/xref/frameworks/av/media/libmediaplayerservice/MediaPlayerService.cpp#1066)
+
+```c++
+status_t MediaPlayerService::Client::prepareAsync()
+{
+    ALOGV("[%d] prepareAsync", mConnId);
+    sp<MediaPlayerBase> p = getPlayer();
+    if (p == 0) return UNKNOWN_ERROR;
+    status_t ret = p->prepareAsync();
+#if CALLBACK_ANTAGONIZER
+    ALOGD("start Antagonizer");
+    if (ret == NO_ERROR) mAntagonizer->start();
+#endif
+    return ret;
+}
+```
+
