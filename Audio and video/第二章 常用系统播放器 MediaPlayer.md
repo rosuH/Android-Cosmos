@@ -759,6 +759,15 @@ status_t MediaPlayer::prepareAsync_l()
 
 `mPlayer->prepareAsync()` 是 `IMediaPlayer` 的匿名 Binder Server，属于 MediaPlayer 架构中的 Server 端，最终回调到 Client 端的 `IMediaPlayer`，也就是`BnMediaPlayer`。该`BnMediaPlayer`对应的代码如下：
 
+```c++
+MediaPlayerService::Client::prepareAsync
+case PREPARE_ASYNC: {
+	CHECK_INTERFACE(IMediaPlayer, data, replay);
+	replay->wraiteInt32(prepareAsymc());
+	return NO_ERROR;
+} break;
+```
+
 [MediaPlayerService::Client::prepareAsync](http://androidxref.com/9.0.0_r3/xref/frameworks/av/media/libmediaplayerservice/MediaPlayerService.cpp#1066)
 
 ```c++
@@ -773,6 +782,81 @@ status_t MediaPlayerService::Client::prepareAsync()
     if (ret == NO_ERROR) mAntagonizer->start();
 #endif
     return ret;
+}
+```
+
+再接着回调用`MediaPlayerBase`的实现类的`preapreAsync()`。之后大致的流程是：
+
+-   判断`mFlags`
+    -   如果已经是`prepareed` 状态，则返回；否则继续执行
+-   启动 `mQueue`（`TimedEventQueue`）队列
+-   修改`mFlags`为 `prepared`，表示正在处理文件音视频流
+-   实例化一个`AwesomeEvent`，放到之前启动的`mQueue`中进行通知
+
+队列的处理结果就是调用`AwesomePlayer::onPrepareAsyncEvent`函数。然后初始化解码器，将流解码出来，此时获取宽高等属性，然后处于`prepared`状态。`prepare`的流程基本完成。
+
+再看看 Java 层中 `prepare` 函数的 `scanInternalSubtitleTracks` 函数，此函数用于扫描内嵌字幕：
+
+```java
+private void scanInternalSubtitleTracks() {
+    // 设置字幕控制节点
+    setSubtitleAnchor();
+
+    populateInbandTracks();
+
+    if (mSubtitleController != null) {
+        mSubtitleController.selectDefaultTrack();
+    }
+}
+```
+
+`MediaPlayer`中的`start`函数：
+
+```java
+public void start() throws IllegalStateException {
+    // 延迟播放操作判断
+    final int delay = getStartDelayMs();
+    if (delay == 0) {
+        startImpl();
+    } else {
+        new Thread() {
+            public void run() {
+                try {
+                    Thread.sleep(delay);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+                baseSetStartDelayMs(0);
+                try {
+                    startImpl();
+                } catch (IllegalStateException e) {
+                    // fail silently for a state exception when it is happening after
+                    // a delayed start, as the player state could have changed between the
+                    // call to start() and the execution of startImpl()
+                }
+            }
+        }.start();
+    }
+}
+
+private void startImpl() {
+    baseStart();
+    // 对屏幕进行操作
+    stayAwake(true);
+    _start();
+}
+
+
+private void stayAwake(boolean awake) {
+    if (mWakeLock != null) {
+        if (awake && !mWakeLock.isHeld()) {
+            mWakeLock.acquire();
+        } else if (!awake && mWakeLock.isHeld()) {
+            mWakeLock.release();
+        }
+    }
+    mStayAwake = awake;
+    updateSurfaceScreenOn();
 }
 ```
 
