@@ -795,11 +795,11 @@ status_t MediaPlayerService::Client::prepareAsync()
 
 队列的处理结果就是调用`AwesomePlayer::onPrepareAsyncEvent`函数。然后初始化解码器，将流解码出来，此时获取宽高等属性，然后处于`prepared`状态。`prepare`的流程基本完成。
 
-再看看 Java 层中 `prepare` 函数的 `scanInternalSubtitleTracks` 函数，此函数用于扫描内嵌字幕：
+再看看 Java 层中 `prepare` 函数的 `scanInternalSubtitleTracks` 函数，此函数用于扫描内嵌字幕并且进行追踪。
 
 ```java
 private void scanInternalSubtitleTracks() {
-    // 设置字幕控制节点
+    // 设置字幕控制锚点
     setSubtitleAnchor();
 
     populateInbandTracks();
@@ -810,11 +810,12 @@ private void scanInternalSubtitleTracks() {
 }
 ```
 
-`MediaPlayer`中的`start`函数：
+然后是`MediaPlayer`中的`start`函数：
 
 ```java
+// 此处的 start 函数主要是判断是否进行延迟播放
 public void start() throws IllegalStateException {
-    // 延迟播放操作判断
+    //FIXME use lambda to pass startImpl to superclass
     final int delay = getStartDelayMs();
     if (delay == 0) {
         startImpl();
@@ -839,14 +840,31 @@ public void start() throws IllegalStateException {
     }
 }
 
+// 真正的 start 函数实现
 private void startImpl() {
     baseStart();
-    // 对屏幕进行操作
     stayAwake(true);
     _start();
 }
+```
 
+此处有三个函数调用，分别是`PlayerBase.java`中的`baseStart()`，主要是更新播放状态、设置音量。
 
+```java
+void baseStart() {
+    if (DEBUG) { Log.v(TAG, "baseStart() piid=" + mPlayerIId); }
+    updateState(AudioPlaybackConfiguration.PLAYER_STATE_STARTED);
+    synchronized (mLock) {
+        if (isRestricted_sync()) {
+            playerSetVolume(true/*muting*/,0, 0);
+        }
+    }
+}
+```
+
+`startAwake(boolean)`是获取唤醒锁：
+
+```java
 private void stayAwake(boolean awake) {
     if (mWakeLock != null) {
         if (awake && !mWakeLock.isHeld()) {
@@ -858,5 +876,39 @@ private void stayAwake(boolean awake) {
     mStayAwake = awake;
     updateSurfaceScreenOn();
 }
+// nWakeLock 在 setWakeMode 方法中得到
+public void setWakeMode(Context context, int mode) {
+    boolean washeld = false;
+
+    /* Disable persistant wakelocks in media player based on property */
+    if (SystemProperties.getBoolean("audio.offload.ignore_setawake", false) == true) {
+        Log.w(TAG, "IGNORING setWakeMode " + mode);
+        return;
+    }
+
+    if (mWakeLock != null) {
+        if (mWakeLock.isHeld()) {
+            washeld = true;
+            mWakeLock.release();
+        }
+        mWakeLock = null;
+    }
+	// 获取 PowerManager 实例
+    PowerManager pm = (PowerManager)context.getSystemService(Context.POWER_SERVICE);
+    // 生成 WakeLock 实例，传入指定的 flag
+    mWakeLock = pm.newWakeLock(mode|PowerManager.ON_AFTER_RELEASE, MediaPlayer.class.getName());
+    mWakeLock.setReferenceCounted(false);
+    if (washeld) {
+        mWakeLock.acquire();
+    }
+}
 ```
+
+不同的 flag 对应的不同锁的类型，对 CPU、屏幕和键盘灯有不同的效果：
+
+-   `PARTIAL_WAKE_LOCK`：保持 CPU 运转，屏幕和键盘灯有可能是关闭的
+-   `SCREEN_DIM_WAKE_LOCK`：保持 CPU 运转，屏幕可能是灰的，允许关闭键盘灯
+-   `SCREEN_BRIGHT_WAKE_LOCK`：保持 CPU 运转，允许屏幕高亮显示，允许关闭键盘灯
+-   `FULL_WAKE_LOCK`：保持 CPU 运转，保持屏幕高亮，也保持键盘灯高亮
+-   `ACQUIRE_CAUSES_WAKE`：获得此锁时，屏幕和键盘灯会立刻打开
 
