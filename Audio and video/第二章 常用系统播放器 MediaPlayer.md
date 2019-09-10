@@ -912,3 +912,145 @@ public void setWakeMode(Context context, int mode) {
 -   `FULL_WAKE_LOCK`：保持 CPU 运转，保持屏幕高亮，也保持键盘灯高亮
 -   `ACQUIRE_CAUSES_WAKE`：获得此锁时，屏幕和键盘灯会立刻打开
 
+`updateSurfaceScreenOn`用于更新屏幕上的`Surface`。
+
+再然后我们看看`start`函数，对应 JNI 中的[android_media_MediaPlayer_start](http://androidxref.com/9.0.0_r3/xref/frameworks/base/media/jni/android_media_MediaPlayer.cpp#452) 函数:
+
+```c++
+static void
+android_media_MediaPlayer_start(JNIEnv *env, jobject thiz)
+{
+    ALOGV("start");
+    //  底层返回一个状态
+    sp<MediaPlayer> mp = getMediaPlayer(env, thiz);
+    if (mp == NULL ) {
+        jniThrowException(env, "java/lang/IllegalStateException", NULL);
+        return;
+    }
+    // 判断是否已经处于 Started 状态
+    process_media_player_call( env, thiz, mp->start(), NULL, NULL );
+}
+
+```
+
+开始视频播放流程后，最终会回调到`mediaplayer.cpp`中实现。[`mediaplayer.h`](http://androidxref.com/9.0.0_r3/xref/frameworks/av/include/media/mediaplayer.h) 中的 MediaPlayer 声明表明它实现了大部分的基础播放控制。
+
+```c++
+class MediaPlayer : public BnMediaPlayerClient,
+                    public virtual IMediaDeathNotifier
+{
+public:
+    MediaPlayer();
+    ~MediaPlayer();
+            void            died();
+            void            disconnect();
+
+            status_t        setDataSource(
+                    const sp<IMediaHTTPService> &httpService,
+                    const char *url,
+                    const KeyedVector<String8, String8> *headers);
+
+            status_t        setDataSource(int fd, int64_t offset, int64_t length);
+            status_t        setDataSource(const sp<IDataSource> &source);
+            status_t        setVideoSurfaceTexture(
+                                    const sp<IGraphicBufferProducer>& bufferProducer);
+            status_t        setListener(const sp<MediaPlayerListener>& listener);
+            status_t        getBufferingSettings(BufferingSettings* buffering /* nonnull */);
+            status_t        setBufferingSettings(const BufferingSettings& buffering);
+            status_t        prepare();
+            status_t        prepareAsync();
+            status_t        start();
+            status_t        stop();
+            status_t        pause();
+            bool            isPlaying();
+            status_t        setPlaybackSettings(const AudioPlaybackRate& rate);
+            status_t        getPlaybackSettings(AudioPlaybackRate* rate /* nonnull */);
+            status_t        setSyncSettings(const AVSyncSettings& sync, float videoFpsHint);
+            status_t        getSyncSettings(
+                                    AVSyncSettings* sync /* nonnull */,
+                                    float* videoFps /* nonnull */);
+            status_t        getVideoWidth(int *w);
+            status_t        getVideoHeight(int *h);
+            status_t        seekTo(
+                    int msec,
+                    MediaPlayerSeekMode mode = MediaPlayerSeekMode::SEEK_PREVIOUS_SYNC);
+            status_t        notifyAt(int64_t mediaTimeUs);
+            status_t        getCurrentPosition(int *msec);
+            status_t        getDuration(int *msec);
+            status_t        reset();
+            status_t        setAudioStreamType(audio_stream_type_t type);
+            status_t        getAudioStreamType(audio_stream_type_t *type);
+            status_t        setLooping(int loop);
+            bool            isLooping();
+            status_t        setVolume(float leftVolume, float rightVolume);
+            void            notify(int msg, int ext1, int ext2, const Parcel *obj = NULL);
+            status_t        invoke(const Parcel& request, Parcel *reply);
+            status_t        setMetadataFilter(const Parcel& filter);
+            status_t        getMetadata(bool update_only, bool apply_filter, Parcel *metadata);
+            status_t        setAudioSessionId(audio_session_t sessionId);
+            audio_session_t getAudioSessionId();
+            status_t        setAuxEffectSendLevel(float level);
+            status_t        attachAuxEffect(int effectId);
+            status_t        setParameter(int key, const Parcel& request);
+            status_t        getParameter(int key, Parcel* reply);
+            status_t        setRetransmitEndpoint(const char* addrString, uint16_t port);
+            status_t        setNextMediaPlayer(const sp<MediaPlayer>& player);
+
+            media::VolumeShaper::Status applyVolumeShaper(
+                                    const sp<media::VolumeShaper::Configuration>& configuration,
+                                    const sp<media::VolumeShaper::Operation>& operation);
+            sp<media::VolumeShaper::State> getVolumeShaperState(int id);
+            // Modular DRM
+            status_t        prepareDrm(const uint8_t uuid[16], const Vector<uint8_t>& drmSessionId);
+            status_t        releaseDrm();
+            // AudioRouting
+            status_t        setOutputDevice(audio_port_handle_t deviceId);
+            audio_port_handle_t getRoutedDeviceId();
+            status_t        enableAudioDeviceCallback(bool enabled);
+
+private:
+            void            clear_l();
+            status_t        seekTo_l(int msec, MediaPlayerSeekMode mode);
+            status_t        prepareAsync_l();
+            status_t        getDuration_l(int *msec);
+            status_t        attachNewPlayer(const sp<IMediaPlayer>& player);
+            status_t        reset_l();
+            status_t        doSetRetransmitEndpoint(const sp<IMediaPlayer>& player);
+            status_t        checkStateForKeySet_l(int key);
+
+    sp<IMediaPlayer>            mPlayer;
+    thread_id_t                 mLockThreadId;
+    Mutex                       mLock;
+    Mutex                       mNotifyLock;
+    Condition                   mSignal;
+    sp<MediaPlayerListener>     mListener;
+    void*                       mCookie;
+    media_player_states         mCurrentState;
+    int                         mCurrentPosition;
+    MediaPlayerSeekMode         mCurrentSeekMode;
+    int                         mSeekPosition;
+    MediaPlayerSeekMode         mSeekMode;
+    bool                        mPrepareSync;
+    status_t                    mPrepareStatus;
+    audio_stream_type_t         mStreamType;
+    Parcel*                     mAudioAttributesParcel;
+    bool                        mLoop;
+    float                       mLeftVolume;
+    float                       mRightVolume;
+    int                         mVideoWidth;
+    int                         mVideoHeight;
+    audio_session_t             mAudioSessionId;
+    float                       mSendLevel;
+    struct sockaddr_in          mRetransmitEndpoint;
+    bool                        mRetransmitEndpointValid;
+};
+
+```
+
+## 2.4 C++ 中 MediaPlayer 的 C/S 架构
+
+本节将会分析 JNI 层的调用。先从`setDataSource`来看 C/S 模式的过程：
+
+```c++
+
+```
