@@ -1049,8 +1049,172 @@ private:
 
 ## 2.4 C++ 中 MediaPlayer 的 C/S 架构
 
-本节将会分析 JNI 层的调用。先从`setDataSource`来看 C/S 模式的过程：
+本节将会分析 JNI 层的调用。先从[`setDataSource`](http://androidxref.com/9.0.0_r3/xref/frameworks/av/media/libmedia/mediaplayer.cpp#175)来看 C/S 模式的过程：
+
+```c++
+status_t MediaPlayer::setDataSource(int fd, int64_t offset, int64_t length)
+{
+    ALOGV("setDataSource(%d, %" PRId64 ", %" PRId64 ")", fd, offset, length);
+    // 初始化赋值为未知状态
+    status_t err = UNKNOWN_ERROR;
+    // 获取 Server 端的 MediaPlayerService
+    const sp<IMediaPlayerService> service(getMediaPlayerService());
+    
+    if (service != 0) {
+        // 调用 Server 的 create 函数
+        sp<IMediaPlayer> player(service->create(this, mAudioSessionId));
+        if ((NO_ERROR != doSetRetransmitEndpoint(player)) ||
+            (NO_ERROR != player->setDataSource(fd, offset, length))) {
+            player.clear();
+        }
+        err = attachNewPlayer(player);
+    }
+    return err;
+}
+```
+
+[MediaPlayerService.cpp 的 Create 函数](http://androidxref.com/9.0.0_r3/xref/frameworks/av/media/libmediaplayerservice/MediaPlayerService.cpp)
 
 ```c++
 
+sp<IMediaPlayer> MediaPlayerService::create(const sp<IMediaPlayerClient>& client,
+        audio_session_t audioSessionId)
+{
+    pid_t pid = IPCThreadState::self()->getCallingPid();
+    int32_t connId = android_atomic_inc(&mNextConnId);
+	// 校验调用方的 UID，用来进行身份认证
+    sp<Client> c = new Client(
+            this, pid, connId, client, audioSessionId,
+            IPCThreadState::self()->getCallingUid());
+
+    ALOGV("Create new client(%d) from pid %d, uid %d, ", connId, pid,
+         IPCThreadState::self()->getCallingUid());
+	// 构造的 client 强引用转换为弱引用
+    wp<Client> w = c;
+    {
+        // 互斥锁
+        Mutex::Autolock lock(mLock);
+        // mClients 声明为 SortedVector<wp<Client>>
+        mClients.add(w);
+    }
+    return c;
+}
 ```
+
+### ProcessState 
+
+在 Binder 机制中，ProcessState 是一个客户端和服务端的公共部分，作为 Binder 通信的基础。
+
+它本身是个 SIngleton 类，每个进程只有一个对象，该对象负责打开 Binder 驱动，建立线程池，让其线程池中所有的线程都能通过 Binder 通信。
+
+### IPCThreadState
+
+在上面代码中的`new Client`中，有一个 IPCThreadState。每个线程都有个 IPCThreadState 实例登记在 Linux 线程的上下文附属数据中，主要负责 Binder 的读取、写入和请求处理。
+
+IPCThreadState 在构造时获取进程的 ProcessState 并记录在自己的成员变量 `mProcess` 中，通过 `mProcess` 可以获得 Binder 的句柄。IPCThreadState 通过 `IPCThreadState::transact` 把 `data` 及 `bundle` 等填充进 `binder_transaction_data`，在两个进程间通信。
+
+
+
+### Client
+
+我们所说的 Client 就是继承了 `BnMediaPlayer`，并包含了`IMediaPlayer` 接口的类。
+
+```c++
+class Client : public BnMediaPlayer {
+    // IMediaPlayer interface
+    virtual void            disconnect();
+    virtual status_t        setVideoSurfaceTexture(
+                                    const sp<IGraphicBufferProducer>& bufferProducer);
+    virtual status_t        setBufferingSettings(const BufferingSettings& buffering) override;
+    virtual status_t        getBufferingSettings(
+                                    BufferingSettings* buffering /* nonnull */) override;
+    virtual status_t        prepareAsync();
+    virtual status_t        start();
+    virtual status_t        stop();
+    virtual status_t        pause();
+    virtual status_t        isPlaying(bool* state);
+    virtual status_t        setPlaybackSettings(const AudioPlaybackRate& rate);
+    virtual status_t        getPlaybackSettings(AudioPlaybackRate* rate /* nonnull */);
+    virtual status_t        setSyncSettings(const AVSyncSettings& rate, float videoFpsHint);
+    virtual status_t        getSyncSettings(AVSyncSettings* rate /* nonnull */,
+                                            float* videoFps /* nonnull */);
+    virtual status_t        seekTo(
+            int msec,
+            MediaPlayerSeekMode mode = MediaPlayerSeekMode::SEEK_PREVIOUS_SYNC);
+    virtual status_t        getCurrentPosition(int* msec);
+    virtual status_t        getDuration(int* msec);
+    virtual status_t        reset();
+    virtual status_t        notifyAt(int64_t mediaTimeUs);
+    virtual status_t        setAudioStreamType(audio_stream_type_t type);
+    virtual status_t        setLooping(int loop);
+    virtual status_t        setVolume(float leftVolume, float rightVolume);
+    virtual status_t        invoke(const Parcel& request, Parcel *reply);
+    virtual status_t        setMetadataFilter(const Parcel& filter);
+    virtual status_t        getMetadata(bool update_only,
+                                        bool apply_filter,
+                                        Parcel *reply);
+    virtual status_t        setAuxEffectSendLevel(float level);
+    virtual status_t        attachAuxEffect(int effectId);
+    virtual status_t        setParameter(int key, const Parcel &request);
+    virtual status_t        getParameter(int key, Parcel *reply);
+    virtual status_t        setRetransmitEndpoint(const struct sockaddr_in* endpoint);
+    virtual status_t        getRetransmitEndpoint(struct sockaddr_in* endpoint);
+    virtual status_t        setNextPlayer(const sp<IMediaPlayer>& player);
+
+     virtual media::VolumeShaper::Status applyVolumeShaper(
+                                    const sp<media::VolumeShaper::Configuration>& configuration,
+                                    const sp<media::VolumeShaper::Operation>& operation) override;
+    virtual sp<media::VolumeShaper::State> getVolumeShaperState(int id) override;
+
+     sp<MediaPlayerBase>     createPlayer(player_type playerType);
+
+     virtual status_t        setDataSource(
+                    const sp<IMediaHTTPService> &httpService,
+                    const char *url,
+                    const KeyedVector<String8, String8> *headers);
+
+     virtual status_t        setDataSource(int fd, int64_t offset, int64_t length);
+
+     virtual status_t        setDataSource(const sp<IStreamSource> &source);
+    virtual status_t        setDataSource(const sp<IDataSource> &source);
+
+
+      sp<MediaPlayerBase>     setDataSource_pre(player_type playerType);
+    status_t                setDataSource_post(const sp<MediaPlayerBase>& p,
+                                               status_t status);
+
+             void            notify(int msg, int ext1, int ext2, const Parcel *obj);
+
+             pid_t           pid() const { return mPid; }
+    virtual status_t        dump(int fd, const Vector<String16>& args);
+
+             audio_session_t getAudioSessionId() { return mAudioSessionId; }
+    // Modular DRM
+    virtual status_t prepareDrm(const uint8_t uuid[16], const Vector<uint8_t>& drmSessionId);
+    virtual status_t releaseDrm();
+    // AudioRouting
+    virtual status_t setOutputDevice(audio_port_handle_t deviceId);
+    virtual status_t getRoutedDeviceId(audio_port_handle_t* deviceId);
+    virtual status_t enableAudioDeviceCallback(bool enabled);
+    // 省略部分代码
+}
+```
+
+
+
+- 继承关系：`Client -> BnMediaPlayer -> IMediaPlayer`
+- `create` 函数构造了一个 `Client` 对象，将此 `Client` 对象添加到 `MediaPlayerService` 类的全局列表 `mClients` （`SortedVector`）中，接着执行`player -> setDataSource(url, headers)`
+  - `sp<IMediaPlayer> player(service -> creeate(this, mAudioSessionId))`
+  - 等价于`sp<IMediaPlayer> player(newClient(**))`
+  - `player` 最终是用 Client 来初始化的，可以认为 `player == Client`
+
+- Client  是 `MediaPlayerService` 内部的一个类
+  - `MediaPlayerService` 运行在服务端，`Client` 也运行在服务端
+
+### IMediaPlayer.h, mediaplayer.h 和 IMediaPlayerClient.h
+
+- 从包结构上看：`IMediaPlayer` 和`IMediaPlayerClient.h` 都在 `frameworks/av/media/libmedia` 包中，`mediaplayer.h` 在 `/av/include/media` 中
+- 功能上而言，三者都不相同
+  - `IMediaPlayer.h` 中定义的基本上都是虚函数，用于实现 `MediaPlayer` 功能接口
+  - `IMediaPlayerClient.h` 功能是描述一个`MediaPlayer`客户端的接口
+  - `mediaplayer.h` 是对外（JNI）的接口，最主要是定义了一个 `MediaPlayer` 类（C++）
